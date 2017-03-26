@@ -39,7 +39,7 @@ func main() {
 	}
 
 	// Init DB
-	db, err = gorm.Open("mysql", fmt.Sprintf("%s:@tcp(%s:%s)/%s?charset=utf8&parseTime=True&loc=Local", conf.MysqlUser, conf.MysqlHost, conf.MysqlPort, conf.MysqlDB))
+	db, err = gorm.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8&parseTime=True&loc=Local", conf.MysqlUser, conf.MysqlPass, conf.MysqlHost, conf.MysqlPort, conf.MysqlDB))
 	if err != nil {
 		log.Fatal(err)
 	}
