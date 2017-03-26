@@ -16,16 +16,21 @@ import (
 type empty struct{}
 
 type config struct {
-	MysqlHost     string
-	MysqlPort     string
-	MysqlDB       string
-	MysqlUser     string
-	MysqlPass     string
+	MysqlHost string
+	MysqlPort string
+	MysqlDB   string
+	MysqlUser string
+	MysqlPass string
+
 	RedisHost     string
 	RedisPort     string
-	RecaptchaKey  string
-	ServerHost    string
-	ServerPort    string
+	RedisCacheTTL int `default:"300"`
+
+	RecaptchaKey string
+
+	ServerHost string
+	ServerPort string
+
 	IgnoreCaptcha bool
 	DebugDB       bool
 	StopTimeout   int `default:"60"`
@@ -34,7 +39,7 @@ type config struct {
 type Env struct {
 	DB        *gorm.DB
 	Conf      *config
-	RedisConn redis.Conn
+	RedisPool *redis.Pool
 
 	wg   *sync.WaitGroup
 	stop chan empty
@@ -94,15 +99,20 @@ func (env *Env) dbInit() (err error) {
 }
 
 func (env *Env) redisInit() (err error) {
-	env.RedisConn, err = redis.Dial("tcp",
-		fmt.Sprintf("%s:%s", env.Conf.RedisHost, env.Conf.RedisPort))
-	if err != nil {
-		return err
+	env.RedisPool = &redis.Pool{
+		MaxIdle:     10,
+		IdleTimeout: 240 * time.Second,
+		Dial: func() (redis.Conn, error) {
+			return redis.Dial(
+				"tcp",
+				fmt.Sprintf("%s:%s", env.Conf.RedisHost, env.Conf.RedisPort))
+		},
 	}
+
 	env.wg.Add(1)
 	go func() {
 		<-env.stop
-		env.RedisConn.Close()
+		env.RedisPool.Close()
 		env.wg.Done()
 	}()
 	return nil
