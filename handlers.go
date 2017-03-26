@@ -2,9 +2,12 @@ package main
 
 import (
 	"net/http"
-	"log"
 	"encoding/json"
 	"io/ioutil"
+	"github.com/8tomat8/ubombiForm/environment"
+	"net"
+	"github.com/dpapathanasiou/go-recaptcha"
+	h "github.com/8tomat8/ubombiForm/helpers"
 )
 
 type Resp struct {
@@ -17,15 +20,11 @@ type Count struct {
 	Count    int    `json:"count"`
 }
 
-func check(err error) bool {
-	if err != nil {
-		log.Println(err)
-		return true
-	}
-	return false
+type Handle struct {
+	environment.Env
 }
 
-func GetStats(w http.ResponseWriter, _ *http.Request) {
+func (ha *Handle) GetStats(w http.ResponseWriter, _ *http.Request) {
 	var count []Count
 	wJson := json.NewEncoder(w)
 
@@ -42,11 +41,11 @@ func GetStats(w http.ResponseWriter, _ *http.Request) {
 	//fmt.Printf("%v\n",results)
 	//return
 
-	rows, err := db.Table("votes").Select("count(*) as value, region_id").Group("region_id").Rows()
-	if check(err) {
+	rows, err := ha.DB.Table("votes").Select("count(*) as value, region_id").Group("region_id").Rows()
+	if h.Check(err) {
 		w.WriteHeader(http.StatusInternalServerError)
 		err = wJson.Encode(Resp{Error: err.Error()})
-		check(err)
+		h.Check(err)
 		return
 	}
 
@@ -58,10 +57,10 @@ func GetStats(w http.ResponseWriter, _ *http.Request) {
 
 	//err = wJson.Encode(v)
 	err = wJson.Encode(Resp{Data: count})
-	check(err)
+	h.Check(err)
 }
 
-func AddVote(w http.ResponseWriter, r *http.Request) {
+func (ha *Handle) AddVote(w http.ResponseWriter, r *http.Request) {
 	wJson := json.NewEncoder(w)
 
 	var request struct {
@@ -72,50 +71,59 @@ func AddVote(w http.ResponseWriter, r *http.Request) {
 	body, err := ioutil.ReadAll(r.Body)
 	r.Body.Close()
 
-	log.Println(string(body))
 	err = json.Unmarshal(body, &request)
-	if check(err) {
+	if h.Check(err) {
 		w.WriteHeader(http.StatusBadRequest)
 		err := wJson.Encode(Resp{Error: err.Error()})
-		check(err)
+		h.Check(err)
 		return
 	}
 
-	log.Printf("%+v\n", request)
-
 	// Check captcha
-	if !checkReCaptcha(request.RecaptchaResp, r.RemoteAddr) {
+	if !checkReCaptcha(ha, request.RecaptchaResp, r.RemoteAddr) {
 		w.WriteHeader(http.StatusBadRequest)
 		err := wJson.Encode(Resp{Error: "Captcha validation failed"})
-		check(err)
+		h.Check(err)
 		return
 	}
 
 	// Save to DB
-	err = db.Create(&request.Vote).Error
-	if check(err) {
+	err = ha.DB.Create(&request.Vote).Error
+	if h.Check(err) {
 		w.WriteHeader(http.StatusInternalServerError)
 		err := wJson.Encode(Resp{Error: err.Error()})
-		check(err)
+		h.Check(err)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	err = wJson.Encode(Resp{})
-	check(err)
+	h.Check(err)
 }
 
-func GetRegions(w http.ResponseWriter, _ *http.Request) {
+func (ha *Handle) GetRegions(w http.ResponseWriter, _ *http.Request) {
 	var regions []Region
 	wJson := json.NewEncoder(w)
 
-	err := db.Find(&regions).Error
-	if check(err) {
+	err := ha.DB.Find(&regions).Error
+	if h.Check(err) {
 		w.WriteHeader(http.StatusInternalServerError)
 		err = wJson.Encode(Resp{Error: err.Error()})
-		check(err)
+		h.Check(err)
 		return
 	}
 	err = wJson.Encode(regions)
-	check(err)
+	h.Check(err)
+}
+
+func checkReCaptcha(h *Handle, recaptchaResponse string, remoteAddr string) (result bool) {
+	if h.Conf.IgnoreCaptcha {
+		return true
+	}
+	ip, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return
+	}
+	result = recaptcha.Confirm(ip, recaptchaResponse)
+	return
 }
