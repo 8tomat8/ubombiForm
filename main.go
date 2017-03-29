@@ -31,6 +31,7 @@ func main() {
 	r := mux.NewRouter()
 	r.Handle("/", http.FileServer(http.Dir("")))
 	r.HandleFunc("/regions", handle.GetRegions).Methods("GET")
+	r.HandleFunc("/votes", handle.GetVotes).Methods("GET")
 	r.HandleFunc("/vote", handle.GetStats).Methods("GET")
 	r.HandleFunc("/vote", handle.AddVote).Methods("POST")
 

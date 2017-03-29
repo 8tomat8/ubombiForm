@@ -10,17 +10,18 @@ import (
 	h "github.com/8tomat8/ubombiForm/helpers"
 	"github.com/garyburd/redigo/redis"
 	"github.com/pkg/errors"
+	"github.com/ulule/paging"
 )
 
 const cacheKey string = "ubombiForm:cachedVoteStats"
 
 type Resp struct {
 	Error string  `json:"error"`
-	Data  []*Count `json:"data"`
+	Data  interface{} `json:"data"`
 }
 
 type Count struct {
-	RegionID string `json:"region_id"`
+	RegionID int `json:"region_id"`
 	Count    int    `json:"count"`
 }
 
@@ -29,20 +30,18 @@ type Handle struct {
 }
 
 func (ha *Handle) GetStats(w http.ResponseWriter, _ *http.Request) {
-	var counts []*Count
 	wJson := json.NewEncoder(w)
 
 	// Trying to get cached stats from Redis
-	err := ha.getCachedStats(&counts)
+	data, err := ha.getCachedStats()
 	if !h.Check(err) {
-		err = wJson.Encode(Resp{Data: counts})
+		err = wJson.Encode(Resp{Data: data})
 		h.Check(err)
 		return
 	}
 
 	// Trying to get stats from DB
-	counts = nil
-	err = ha.getPersistStats(&counts)
+	data, err = ha.getPersistStats()
 	if h.Check(err) {
 		w.WriteHeader(http.StatusBadRequest)
 		err := wJson.Encode(Resp{Error: err.Error()})
@@ -51,10 +50,47 @@ func (ha *Handle) GetStats(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	// Caching stats to Redis
-	err = ha.setCachedStats(&counts)
+	err = ha.setCachedStats(data)
 	h.Check(err)
 
-	err = wJson.Encode(Resp{Data: counts})
+	err = wJson.Encode(Resp{Data: data})
+	h.Check(err)
+}
+
+func (ha *Handle) GetVotes(w http.ResponseWriter, r *http.Request) {
+	var votes []*Vote
+	wJson := json.NewEncoder(w)
+
+	store, err := paging.NewGORMStore(ha.DB, &votes)
+	if h.Check(err) {
+		w.WriteHeader(http.StatusInternalServerError)
+		err = wJson.Encode(Resp{Error: err.Error()})
+		h.Check(err)
+		return
+	}
+
+	// TODO: singleton
+	opts := paging.NewOptions()
+	opts.OffsetKeyName = "page"
+	opts.LimitKeyName = "on_page"
+
+	paginator, err := paging.NewOffsetPaginator(store, r, opts)
+	if h.Check(err) {
+		w.WriteHeader(http.StatusInternalServerError)
+		err = wJson.Encode(Resp{Error: err.Error()})
+		h.Check(err)
+		return
+	}
+
+	err = paginator.Page()
+	if h.Check(err) {
+		w.WriteHeader(http.StatusInternalServerError)
+		err = wJson.Encode(Resp{Error: err.Error()})
+		h.Check(err)
+		return
+	}
+
+	err = wJson.Encode(votes)
 	h.Check(err)
 }
 
@@ -126,52 +162,52 @@ func (ha *Handle) checkReCaptcha(recaptchaResponse string, remoteAddr string) (r
 	return
 }
 
-func (ha *Handle) getCachedStats(counts *[]*Count) error {
+func (ha *Handle) getCachedStats() (counts []interface{}, err error) {
 	conn := ha.RedisPool.Get()
 	defer conn.Close()
 	reply, err := redis.Values(conn.Do("HGETALL", cacheKey))
 	if h.Check(err) {
-		return err
+		return
 	}
 
 	for len(reply) > 0 {
 		c := &Count{}
 		reply, err = redis.Scan(reply, &c.RegionID, &c.Count)
 		if h.Check(err) {
-			return err
+			return
 		}
-		*counts = append(*counts, c)
+		counts = append(counts, c)
 	}
-	if len(*counts) == 0 {
-		return errors.New("No cached stats in Redis.")
+	if len(counts) == 0 {
+		return nil, errors.New("No cached stats in Redis.")
 	}
 
-	return nil
+	return
 }
 
-func (ha *Handle) getPersistStats(counts *[]*Count) error {
+func (ha *Handle) getPersistStats() (counts []interface{}, err error) {
 	rows, err := ha.DB.Table("votes").Select("count(*) as count, region_id").Group("region_id").Rows()
 	if h.Check(err) {
-		return err
+		return
 	}
 
 	for rows.Next() {
 		c := &Count{}
 		err = rows.Scan(&c.Count, &c.RegionID)
 		if h.Check(err) {
-			return err
+			return
 		}
-		*counts = append(*counts, c)
+		counts = append(counts, c)
 	}
-	return nil
+	return
 }
 
-func (ha *Handle) setCachedStats(counts *[]*Count) (err error ){
+func (ha *Handle) setCachedStats(counts []interface{}) (err error) {
 	conn := ha.RedisPool.Get()
 	defer conn.Close()
 
-	for _, count := range *counts {
-		err = conn.Send("HSET", cacheKey, count.RegionID, count.Count)
+	for _, count := range counts {
+		err = conn.Send("HSET", cacheKey, count.(*Count).RegionID, count.(*Count).Count)
 		if h.Check(err) {
 			return err
 		}
